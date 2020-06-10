@@ -209,7 +209,7 @@ def email_override(old_email):
     new_email = old_email.replace(old_domain, new_domain)
 
   # Log if mail changed
-  if not new_mail == old_email:
+  if not new_email == old_email:
     logging.debug("Email changed from {} to {}".format(old_email, new_email)) 
 
   # Return potentially changed email
