@@ -35,33 +35,60 @@ config = configparser.ConfigParser()
 # Do not override domain by default
 config['DEFAULT'] = {'email_domain_overrides': []}
 
-
-
 # Read the config file
-#config.read("ldap2float.conf")
 config.read(args.config)
 
-
-# Read list of valid Float guests (Account with no people) from config.
-valid_guests = eval(config.get("conf","valid_guests"))
-assert isinstance(valid_guests, list), "valid_guests must be a list. Check config."
-
+# Handler to use for logging. Use stdout if no file configured
+try:
+  h = logging.FileHandler(config.get("logging","file"))
+except configparser.NoOptionError:
+  h = logging.StreamHandler()
 
 # Configure logging
 logging.basicConfig(
-  level = eval(config.get("logging","level")),
-  filename = config.get("logging","file"),
-  format='%(asctime)s:%(levelname)s:%(message)s'
+  level = eval("logging." + config.get("logging","level").upper()),
+  format='%(asctime)s:%(levelname)s:%(message)s',
+  handlers = [h]
   )
+
+logging.debug("Logging handler: {}".format(h))
 
 logging.info("Running ldap2float.py")
 
 # Float accounts will be deleted if end_date is this many days in the past
 delete_after_days = int(config.get('conf', 'delete_after_days'))
-assert delete_after_days > 0, "Delete_after_days must be positive"
+if not delete_after_days > 0:
+  e = ("Config delete_after_days must be positive. Value is {}."
+    .format(delete_after_days))
+  raise ValueError(e)
 
+# The maximum numbers of Float users to delete in an invocation
 max_users_to_delete = int(config.get('conf', 'max_users_to_delete'))
-assert max_users_to_delete >= 0, "max_users_to_delete must be non negative"
+if not delete_after_days >= 0:
+  e = ("Config max_users_to_delete must be non negative. Value is {}."
+    .format(max_users_to_delete))
+  raise ValueError(e)
+
+# List of valid Float guests (Account with no matching people).
+valid_guests = eval(config.get("conf","valid_guests"))
+if not isinstance(valid_guests, list):
+  e = ("Config valid_guests must be a list. Value is {}."
+    .format(valid_guests))
+  raise ValueError(e)
+
+# email_domain_overrides
+email_domain_overrides = eval(config.get("float","email_domain_overrides"))
+if not isinstance(email_domain_overrides, list):
+  e = ("Config email_domain_overrides must be a list. Value is {}."
+    .format(email_domain_overrides))
+  raise ValueError(e)
+
+# Domain overrides must be pairs
+for pair in email_domain_overrides:
+  if not len(pair) == 2:
+    e = ("Config email_domain_overrides must be a list of pairs. Found {}."
+      .format(pair))
+    raise ValueError(e)
 
 # Create a Float API object
 float_api = FloatAPI(
@@ -69,14 +96,6 @@ float_api = FloatAPI(
   config.get("float","application_name"),
   config.get("float","contact_email")
 )
-
-# print(config.get('float', 'email_domain_override'))
-
-# email_domain_overrides
-assert type(eval(config.get("float","email_domain_overrides"))) == list 
-
-for pair in eval(config.get("float","email_domain_overrides")):
-  assert len(pair) == 2, 'email_domain_overrides must be list of pairs'
 
 # Department from config
 # FIXME: Should be optional
@@ -179,27 +198,21 @@ ldap_connection.search(
 
 
 # FIXME: Add sdictionary which maps LDAP attributes to float fields
-'''
-deps = float_api.get_all_departments()
-deps = {d['name']: d for d in deps}
 
-if department:
-  if department not in deps.keys():
-    department = float_api.create_department(name=department)
-    logging.info("Created Float department '{}'".format(department))
-
-department = float_api.get_department(16835724)
-print(department)
-'''
-def email_override(email):
+def email_override(old_email):
   """
-  Input an email. Returns overidden email (If applicable)
+  Input an email. Returns email with overridden domain (If applicable)
   """
-  new_email = email
+  new_email = old_email
   # Look through domains to override
-  for old_domain, new_domain in eval(config.get('float', 'email_domain_overrides')):
-    new_email = email.replace(old_domain, new_domain)
+  for old_domain, new_domain in email_domain_overrides:
+    new_email = old_email.replace(old_domain, new_domain)
 
+  # Log if mail changed
+  if not new_mail == old_email:
+    logging.debug("Email changed from {} to {}".format(old_email, new_email)) 
+
+  # Return potentially changed email
   return new_email
 
 
@@ -208,7 +221,7 @@ def ldap_person2float_person(ldap_person):
   Takes data for an LDAP person and converts to a
   dictionary of Float Person.
   """
-  
+
   # The dict to return
   float_data = {
     'name': None,
@@ -221,7 +234,7 @@ def ldap_person2float_person(ldap_person):
     'employee_type': 0, # Part time
     'people_type_id': 2, # contractor
     }
-  
+
   # person's name
   if ldap_person.cn.value:
     float_data['name'] = ldap_person.cn.value
