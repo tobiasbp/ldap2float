@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+import argparse
+import os
+from datetime import datetime, date , timedelta
+import logging
+
+import ldap3
+import configparser
+import ssl
+
+from float_api import FloatAPI, UnexpectedStatusCode
+
+
+
+parser = argparse.ArgumentParser(
+  allow_abbrev=False,
+  description="Sync users from LDAP to Float"
+  )
+
+# Config file from command line
+parser.add_argument(
+  'config',
+  metavar='/path/to/config.conf',
+  help="Path to the configuration file"
+  )
+
+# Parse the command line arguments
+args = parser.parse_args()
+
+
+# Object for parsing config file
+config = configparser.ConfigParser()
+
+# Default config (Applies to ALL sections)
+# Do not override domain by default
+config['DEFAULT'] = {'email_domain_overrides': []}
+
+
+
+# Read the config file
+#config.read("ldap2float.conf")
+config.read(args.config)
+
+
+# Read list of valid Float guests (Account with no people) from config.
+valid_guests = eval(config.get("conf","valid_guests"))
+assert isinstance(valid_guests, list), "valid_guests must be a list. Check config."
+
+
+# Configure logging
+logging.basicConfig(
+  level = eval(config.get("logging","level")),
+  filename = config.get("logging","file"),
+  format='%(asctime)s:%(levelname)s:%(message)s'
+  )
+
+logging.info("Running ldap2float.py")
+
+# Float accounts will be deleted if end_date is this many days in the past
+delete_after_days = int(config.get('conf', 'delete_after_days'))
+assert delete_after_days > 0, "Delete_after_days must be positive"
+
+max_users_to_delete = int(config.get('conf', 'max_users_to_delete'))
+assert max_users_to_delete >= 0, "max_users_to_delete must be non negative"
+
+# Create a Float API object
+float_api = FloatAPI(
+  config.get("float","access_token"),
+  config.get("float","application_name"),
+  config.get("float","contact_email")
+)
+
+# print(config.get('float', 'email_domain_override'))
+
+# email_domain_overrides
+assert type(eval(config.get("float","email_domain_overrides"))) == list 
+
+for pair in eval(config.get("float","email_domain_overrides")):
+  assert len(pair) == 2, 'email_domain_overrides must be list of pairs'
+
+# Department from config
+# FIXME: Should be optional
+#department = config.get("data","department")
+
+'''
+print("accounts:")
+accounts = float_api.get_all_accounts()
+for a in accounts:
+  print(a)
+
+print("people:")
+people = float_api.get_all_people()
+for p in people:
+  print(p)
+'''
+
+
+#################################################
+# Delete users in Float with no email (Our key) #
+#################################################
+
+try:
+  for p in float_api.get_all_people():
+    # Look for missing email
+    if not p['email']:
+      # Delete person
+      r = float_api.delete_person(p['people_id'])
+      logging.warning("Deleted float user '{}' because of missing email"
+        .format(p['name']))
+except Exception as e:
+  message = "Could not get users from Float with error: {}".format(e)
+  logging.error(message)
+  # Inform the user
+  print("Error:", message)
+  # Exit programme with error
+  exit(1)
+
+# Dict of people in float with email as key
+float_people = float_api.get_all_people()
+float_people = {data['email']: data for data in float_people if data['email']}
+
+#print(float_people.keys())
+
+# TLS configuration fort the LDAP connection
+#tls_configuration = ldap3.Tls(
+#  validate=ssl.CERT_NONE,
+#  version=ssl.PROTOCOL_TLSv1
+#  )
+
+
+# The LDAP server
+ldap_server = ldap3.Server(
+  config.get("ldap","url"),
+  #tls=tls_configuration,
+  #port=389
+  )
+
+
+# Connect to the LDAP server
+ldap_connection = ldap3.Connection(
+  ldap_server,
+  config.get("ldap","user_dn"),
+  config.get("ldap","user_pass"),
+  auto_bind=False
+  )
+
+ldap_connection.open()
+ldap_connection.start_tls()
+ldap_connection.bind()
+
+# Get the group from LDAP
+ldap_connection.search(
+  config.get("ldap","group_dn"),
+  "(objectClass=*)",
+  search_scope=ldap3.BASE,
+  attributes=['*']
+  )
+
+# Must have a single group
+assert len(ldap_connection.entries) == 1, "No of matching groups must be 1"
+
+# UIDs of valid users (Group members)
+valid_ldap_users = []
+
+# Get the list of group members
+# FIXME: Value holding members should be configurable
+# FIXME: Do I really need to loop here?
+for x in ldap_connection.entries:
+  valid_ldap_users = x.memberUid.value
+
+
+
+# Search for people in LDAP
+ldap_connection.search(
+  config.get("ldap","base"),
+  config.get("ldap","filter"),
+  attributes=['cn','uid','mail','title','employeeType', 'fdContractStartDate', 'fdContractEndDate']
+  )
+
+
+# FIXME: Add sdictionary which maps LDAP attributes to float fields
+'''
+deps = float_api.get_all_departments()
+deps = {d['name']: d for d in deps}
+
+if department:
+  if department not in deps.keys():
+    department = float_api.create_department(name=department)
+    logging.info("Created Float department '{}'".format(department))
+
+department = float_api.get_department(16835724)
+print(department)
+'''
+def email_override(email):
+  """
+  Input an email. Returns overidden email (If applicable)
+  """
+  new_email = email
+  # Look through domains to override
+  for old_domain, new_domain in eval(config.get('float', 'email_domain_overrides')):
+    new_email = email.replace(old_domain, new_domain)
+
+  return new_email
+
+
+def ldap_person2float_person(ldap_person):
+  """
+  Takes data for an LDAP person and converts to a
+  dictionary of Float Person.
+  """
+  
+  # The dict to return
+  float_data = {
+    'name': None,
+    'email': None,
+    'job_title': None,
+    'start_date': None,
+    'end_date': None,
+    #'department': None,
+    'active': 1,
+    'employee_type': 0, # Part time
+    'people_type_id': 2, # contractor
+    }
+  
+  # person's name
+  if ldap_person.cn.value:
+    float_data['name'] = ldap_person.cn.value
+
+  # person's email
+  if ldap_person.mail.value:
+    float_data['email'] = email_override(ldap_person.mail.value)
+
+  # person's title
+  if ldap_person.title.value:
+    if isinstance(ldap_person.title.value, list):
+      float_data['job_title'] = ', '.join(ldap_person.title.value)
+    else:
+      float_data['job_title'] = ldap_person.title.value
+
+  # start_date as date object
+  if ldap_person.fdContractStartDate.value:
+    float_data['start_date'] = datetime.strptime(
+      ldap_person.fdContractStartDate.value,
+      '%Y%m%d00Z'
+      ).date().isoformat()
+
+  if ldap_person.fdContractEndDate.value:
+    float_data['end_date'] = datetime.strptime(
+      ldap_person.fdContractEndDate.value,
+      '%Y%m%d00Z'
+      ).date()
+
+  # Inactive if last day is in the past
+  if float_data['end_date'] and float_data['end_date'] < datetime.today().date():
+      float_data['active'] = 0
+  
+  # Convert end_date to string
+  if float_data['end_date']:
+   float_data['end_date'] = float_data['end_date'].isoformat() 
+
+  # Employee in LDAP is full time in float
+  if ldap_person.employeeType.value == 'employee':
+    # 1=full time, 0=part time
+    float_data['employee_type'] = 1
+
+  # Employee in LDAP is employee in float
+  if ldap_person.employeeType.value == 'employee':
+    float_data['people_type_id'] = 1
+
+  return float_data
+
+
+def float_user_needs_update(float_data, latest_data):
+  """
+  Return False if all values in latest_data matches
+  all values in float_data. Return Trues otherwise
+  indicating that the data in Float needs to be updated
+  """
+
+  # Loop through latest data
+  for key, value in latest_data.items():
+    # Look for mismatches
+    if value != float_data[key]:
+      # Found a mismatch. Needs to update
+      return True
+
+  # No need to update since all values matched
+  return False
+
+# A set of emails of LDAP users
+
+ldap_user_emails = set(
+  email_override(user.mail.value) for user in ldap_connection.entries
+  )
+
+# Debug
+logging.debug('Processing {} users from LDAP'.format(len(ldap_user_emails)))
+
+# Create LDAP users not in Float
+for p_ldap in ldap_connection.entries:
+
+  # Make sure user is a member of the LDAP group
+  if p_ldap.uid.value in valid_ldap_users:
+    logging.debug("User {} is member of Float group"
+      .format(p_ldap.cn.value))
+  else:
+    logging.debug("User {} not member of Float group"
+      .format(p_ldap.cn.value))
+    # Do not process this user
+    continue
+
+  # Convert the curent user's data to a dict with Float keys
+  float_data = ldap_person2float_person(p_ldap)
+
+  # If user has an end date
+  if float_data['end_date']:
+
+    # Convert end date to date object
+    d = float_data['end_date'].split('-')
+    e_d = date(int(d[0]), int(d[1]), int(d[2]))
+
+    # Do not create user if end_date is in the past
+    if e_d < datetime.today().date():
+      logging.debug("Not creating Float user '{}' because end_date is in the past".format(float_data['name']))
+      continue
+
+  # Create user not in float based on email
+  if email_override(p_ldap.mail.value) not in float_people.keys():
+
+    # Add the LDAP user to Float
+    try:
+      r = float_api.create_person(**float_data)
+    except (UnexpectedStatusCode, DataValidationError) as e:
+      logging.error("Could not add user '{}' to Float. Error was: {}"
+        .format(float_data['name'], e))
+    else:
+      logging.info("Added user '{}' to Float"
+        .format(float_data['name']))
+      continue
+  else:
+    logging.debug("User '{}' already in Float. Not adding"
+      .format(float_data['name']))
+
+
+# Update Float users with LDAP data
+for p_ldap in ldap_connection.entries:
+
+  # Do nothing if LDAP user is not in Float
+  if email_override(p_ldap.mail.value) not in float_people.keys():
+    continue
+
+  # Convert the curent user's data to a dict with Float keys
+  float_data = ldap_person2float_person(p_ldap)
+ 
+  # If LDAP user is in Float, but not in LDAP Float group.
+  if p_ldap.uid.value not in valid_ldap_users:
+    #logging.debug("User {} not member of Float group"
+    #print("User {} in Float, but not member of Float group"
+    #  .format(p_ldap.cn.value))
+    try:
+      # Look up the Float people_id
+      people_id = float_people[float_data['email']]['people_id']
+
+      # Delete the Float person
+      r = float_api.delete_person(people_id)
+
+    except (UnexpectedStatusCode, DataValidationError) as e:
+      # Log the error
+      logging.error("Could not delete user '{}' from Float with error: '{}'"
+        .format(float_data['name'], e)
+        )
+    else:
+      # Log the deletion of the person
+      logging.info("Deleted LDAP user '{}' from Float. Not a member of LDAP group."
+        .format(float_data['name'])
+        )
+      # Don't process this LDAP user further
+      continue
+
+  # Update existing Float person if needed
+  if float_user_needs_update(
+    float_people[float_data['email']],
+    float_data
+    ):
+
+    # Add the float people_id to the person data from LDAP
+    float_data['people_id'] = float_people[float_data['email']]['people_id']
+
+    # Update person in Float
+    try:
+      r = float_api.update_person(**float_data)
+    except (UnexpectedStatusCode, DataValidationError) as e:
+      logging.error("Could not update Float user '{}'. Error was: {}"
+        .format(float_data['name'], e))
+    else:
+      logging.info("Updated Float user '{}'".format(float_data['name']))
+
+  else:
+    logging.debug("No need to update Float user '{}'".format(float_data['name']))
+
+
+# Delete Float users matching expired LDAP users
+float_users_deleted = 0
+for p_ldap in ldap_connection.entries:
+
+  # Do nothing if LDAP user is not in Float
+  if email_override(p_ldap.mail.value) not in float_people.keys():
+    continue
+  
+  # Convert the curent user's LDAP data to a dict with Float keys
+  float_data = ldap_person2float_person(p_ldap)
+
+  # Do nothing if user has no end date
+  if float_data['end_date'] == None:
+    continue
+
+  # Convert end date to date object
+  d = float_data['end_date'].split('-')
+  e_d = date(int(d[0]), int(d[1]), int(d[2]))
+
+  # Delete if user's end_date is too far in the past
+  if e_d + timedelta(days=delete_after_days) < datetime.today().date():
+
+    # Float data for the user to delete
+    user_to_delete = float_people[email_override(p_ldap.mail.value)]
+    
+    # Do not delete if max_users_to_delete reached
+    if float_users_deleted >= max_users_to_delete:
+      logging.warning("Not deleting float user '{}' because {} users already deleted in this invocation"
+        .format(float_data['name'], float_users_deleted))
+    else:
+
+      # Delete the user from Float
+      try:
+          result = float_api.delete_person(user_to_delete['people_id'])
+      except (UnexpectedStatusCode, DataValidationError) as e:
+        # Log error if we got unexpected status code
+        logging.error("Could not delete user '{}' in Float. Error was '{}'"
+          .format(float_data['name'], e))
+      else:
+          # Log the deletion
+          logging.info("Deleted Float user '{}' because end_date '{}' is +{} days in the past"
+            .format(float_data['name'], float_data['end_date'], delete_after_days))
+          float_users_deleted += 1
+
+
+# A set of emails of float users not matching LDAP users
+float_emails_not_in_ldap = float_people.keys() - ldap_user_emails
+
+# Warn about float users with email not matching an LDAP user
+for fu_mail in float_emails_not_in_ldap:
+  logging.warning("Float user '{}' with email '{}' not in LDAP"
+    .format(float_people[fu_mail]['name'], fu_mail))
+
+# Warn about accounts with no matching people (A guest)
+try:
+  accounts = float_api.get_all_accounts()
+except (UnexpectedStatusCode, DataValidationError) as e:
+  logging.error("Could not get Float accounts. Error was: {}".format(e))
+else:
+  for a in accounts:
+    # Ignore valid guests
+    if a['email'] in valid_guests:
+      continue
+  
+    # Warn about unknown guests
+    if a['email'] not in float_people.keys():
+      logging.warning("Account with name '{}' and email '{}' has no matching people object"
+        .format(a['name'], a['email']))
+
+
+logging.info("Done running ldap2float.py")
