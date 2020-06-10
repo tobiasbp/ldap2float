@@ -210,8 +210,8 @@ def email_override(old_email):
 
   # Log if mail changed
   if not new_email == old_email:
-    logging.debug("Email changed from {} to {}".format(old_email, new_email)) 
-
+    #logging.debug("Email override: {} > {}".format(old_email, new_email)) 
+    pass
   # Return potentially changed email
   return new_email
 
@@ -221,6 +221,7 @@ def ldap_person2float_person(ldap_person):
   Takes data for an LDAP person and converts to a
   dictionary of Float Person.
   """
+  logging.debug("LDAP data to convert to Float data: {}".format(ldap_person))
 
   # The dict to return
   float_data = {
@@ -235,41 +236,36 @@ def ldap_person2float_person(ldap_person):
     'people_type_id': 2, # contractor
     }
 
-  # person's name
+  # Person's name
   if ldap_person.cn.value:
     float_data['name'] = ldap_person.cn.value
 
-  # person's email
+  # Person's email
   if ldap_person.mail.value:
     float_data['email'] = email_override(ldap_person.mail.value)
 
-  # person's title
+  # Person's title
   if ldap_person.title.value:
     if isinstance(ldap_person.title.value, list):
       float_data['job_title'] = ', '.join(ldap_person.title.value)
     else:
       float_data['job_title'] = ldap_person.title.value
 
-  # start_date as date object
+  # Person's start date
   if ldap_person.fdContractStartDate.value:
-    float_data['start_date'] = datetime.strptime(
-      ldap_person.fdContractStartDate.value,
-      '%Y%m%d00Z'
-      ).date().isoformat()
+    float_data['start_date'] = ldap_date2string(
+      ldap_person.fdContractStartDate.value)
 
+  # Person's end date
   if ldap_person.fdContractEndDate.value:
-    float_data['end_date'] = datetime.strptime(
-      ldap_person.fdContractEndDate.value,
-      '%Y%m%d00Z'
-      ).date()
+    float_data['end_date'] = ldap_date2string(
+      ldap_person.fdContractEndDate.value)
 
   # Inactive if last day is in the past
-  if float_data['end_date'] and float_data['end_date'] < datetime.today().date():
-      float_data['active'] = 0
-  
-  # Convert end_date to string
   if float_data['end_date']:
-   float_data['end_date'] = float_data['end_date'].isoformat() 
+    ed = datetime.strptime(float_data['end_date'],'%Y-%m-%d').date()
+    if ed < datetime.today().date():
+      float_data['active'] = 0
 
   # Employee in LDAP is full time in float
   if ldap_person.employeeType.value == 'employee':
@@ -289,7 +285,6 @@ def float_user_needs_update(float_data, latest_data):
   all values in float_data. Return Trues otherwise
   indicating that the data in Float needs to be updated
   """
-
   # Loop through latest data
   for key, value in latest_data.items():
     # Look for mismatches
@@ -300,8 +295,37 @@ def float_user_needs_update(float_data, latest_data):
   # No need to update since all values matched
   return False
 
-# A set of emails of LDAP users
 
+def ldap_date2string(ldap_date):
+  '''
+  Convert LDAP date in to a Float compatible date. YYYY-MM-DD.
+  Input can be a string or a date object
+  '''
+
+  date_string = None
+
+  # Try to convert the date from a string
+  try:
+    date_string = datetime.strptime(
+      ldap_date,
+      '%Y%m%d00Z'
+      ).date().isoformat()
+  except Exception as e:
+    logging.debug("Could not create date from string: {}".format(e))
+
+    try:
+      date_string = ldap_date.date().isoformat()
+    except Exception as e:
+      # No reason to go
+      m = "Could not convert date from LDAP: {}".format(e)
+      raise ValueError(m)
+
+  # FIXME: Throw error if string is not YYYY-MM-DD
+
+  return date_string
+
+
+# A set of emails of LDAP users
 ldap_user_emails = set(
   email_override(user.mail.value) for user in ldap_connection.entries
   )
@@ -314,10 +338,10 @@ for p_ldap in ldap_connection.entries:
 
   # Make sure user is a member of the LDAP group
   if p_ldap.uid.value in valid_ldap_users:
-    logging.debug("User {} is member of Float group"
+    logging.debug("User {} is member of LDAP group with Float users"
       .format(p_ldap.cn.value))
   else:
-    logging.debug("User {} not member of Float group"
+    logging.debug("User {} not member of LDAP group with Float users"
       .format(p_ldap.cn.value))
     # Do not process this user
     continue
@@ -358,7 +382,7 @@ for p_ldap in ldap_connection.entries:
 # Update Float users with LDAP data
 for p_ldap in ldap_connection.entries:
 
-  # Do nothing if LDAP user is not in Float
+  # Do nothing if LDAP user is not a current Float user
   if email_override(p_ldap.mail.value) not in float_people.keys():
     continue
 
@@ -367,9 +391,8 @@ for p_ldap in ldap_connection.entries:
  
   # If LDAP user is in Float, but not in LDAP Float group.
   if p_ldap.uid.value not in valid_ldap_users:
-    #logging.debug("User {} not member of Float group"
-    #print("User {} in Float, but not member of Float group"
-    #  .format(p_ldap.cn.value))
+    logging.debug("User {} is in Float, but not member of Float access group"
+      .format(p_ldap.cn.value))
     try:
       # Look up the Float people_id
       people_id = float_people[float_data['email']]['people_id']
