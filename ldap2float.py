@@ -29,7 +29,8 @@ args = parser.parse_args()
 
 
 # Object for parsing config file
-config = configparser.ConfigParser()
+# Use raw in order to not do interpolation
+config = configparser.RawConfigParser()
 
 # Default config (Applies to ALL sections)
 # Do not override domain by default
