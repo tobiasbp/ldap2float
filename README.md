@@ -2,6 +2,14 @@
 A tool for syncing data available via LDAP with the project management service Float at float.com.
 No data is written to the LDAP server.
 
+# Run locally
+
+* Clone repository
+* Install Pythob packages: `pip3 install -r requirements.txt`
+* Copy *ldap2float.conf* to *ldap2float.local.conf*
+* Update *ldap2float.local.conf* with your configuration.
+* Run ldap2float: `./ldap2float ./ldap2float.local.conf`
+
 # Run in Docker
 
 * Clone repository
@@ -20,7 +28,7 @@ This section assumes you have a Kubernetes cluster up and running.
 Files mentioned in this section are in the directory called *k8s*.
 
 * Clone repository
-* Copy *ldap2float-config.yml* to `ldap2float-config.local.yml` and edit it to match your configuration.
+* Copy *ldap2float-config.yml* to *ldap2float-config.local.yml* and edit it to match your configuration.
 * Create new namespace *automation* in Kubernetes: `kubectl create -f ldap2float-namespace.yml`
 * Add your ldap2float configuration to Kubernetes: `kubectl create -f ldap2float-config.yml`
 * Add cronjob to Kubernetes: `kubectl create -f ldap2float-cronjob.yml`
@@ -78,3 +86,4 @@ Since the logs are a part of the completed jobs, you will only be able to see th
 - [ ] If no LDAP group is specified, all users found beneath the LDAP base should be added to Float
 - [ ] Run flake (or similar) to check code
 - [ ] Accept configuration parameters as environment variables
+- [ ] Allow for logging to stdout and file at the same time
