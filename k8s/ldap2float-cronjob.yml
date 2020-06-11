@@ -1,0 +1,34 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: ldap2float
+  namespace: automation
+spec:
+  schedule: "*/5 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          volumes:
+            - name: config-volume
+              configMap:
+                name: l2f-config
+          containers:
+          - name: ldap2float
+            image: tobiasbp/ldap2float
+            volumeMounts:
+              - name: config-volume
+                mountPath: /etc/ldap2float.conf
+                subPath: ldap2float.conf
+            #env:
+            #  - name: L2F_API_TOKEN
+            #    valueFrom:
+            #      secretKeyRef:
+            #        name: l2f-secret
+            #        key: l2f_api_token
+            #  - name: L2F_LDAP_PASSWORD
+            #    valueFrom:
+            #      secretKeyRef:
+            #        name: l2f-secret
+            #        key: l2f_ldap_password
