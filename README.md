@@ -1,28 +1,31 @@
 # ldap2float
-A tool for syncing data available via LDAP with the project management service Float.com.
+A tool for syncing data available via LDAP with the project management service Float at float.com.
 No data is written to the LDAP server.
 
 # Run in Docker
 
 * Clone repository
-* Copy `ldap2float.conf` and modify. In this example I assume it's at `/example/path/ldap2float.conf`
+* Copy *ldap2float.conf* to */example/path/ldap2float.conf* (An example path).
+* Update */example/path/ldap2float.conf* with your configuration.
 * Build the image: `docker build --tag ldap2float .`
 * Run a container to test: `docker run --rm -v /example/path/ldap2float.conf:/etc/ldap2float.conf ldap2float`
-* Set up a cron job to run the container as above
+* You should see the log from ldap2float confirming a successful run.
+* Set up a cron job to run the container as in the example above.
 
-Using the flag `--rm` removed the container after each run of ldap2float.
+Using the flag *--rm* removes the container after each run of ldap2float.
 If you don't do that, you will end up with a lot of unused containers.
 
 # Run with Kubernetes
 This section assumes you have a Kubernetes cluster up and running.
-Files mentioned in this section are in the directory called `k8s`.
+Files mentioned in this section are in the directory called *k8s*.
 
-* Copy `ldap2float-config.yml` to `ldap2float-config.local.yml` and edit it to match your configuration.
-* Create new namespace `automation` in Kubernetes: `kubectl create -f ldap2float-namespace.yml`
+* Clone repository
+* Copy *ldap2float-config.yml* to `ldap2float-config.local.yml` and edit it to match your configuration.
+* Create new namespace *automation* in Kubernetes: `kubectl create -f ldap2float-namespace.yml`
 * Add your ldap2float configuration to Kubernetes: `kubectl create -f ldap2float-config.yml`
 * Add cronjob to Kubernetes: `kubectl create -f ldap2float-cronjob.yml`
 
-Let's see what's in the namespace `automation`: `kubectl get all -n automation`
+Let's see what's in the namespace *automation*: `kubectl get all -n automation`
 
 You should see something like this:
 ```
@@ -71,7 +74,7 @@ Since the logs are a part of the completed jobs, you will only be able to see th
 - [ ] Add dry-run option from CLI. Should be default.
 - [ ] Option for creating departmens in Float based on LDAP structure.
 - [X] Add configuration files for running with Docker.
-- [ ] Add configuration files for running with Kubernetes as a cron job.
+- [X] Add configuration files for running with Kubernetes as a cron job.
 - [ ] If no LDAP group is specified, all users found beneath the LDAP base should be added to Float
 - [ ] Run flake (or similar) to check code
 - [ ] Accept configuration parameters as environment variables
