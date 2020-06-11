@@ -52,7 +52,6 @@ logging.basicConfig(
   )
 
 logging.debug("Logging handler: {}".format(h))
-
 logging.info("Running ldap2float.py")
 
 # Float accounts will be deleted if end_date is this many days in the past
@@ -89,6 +88,10 @@ for pair in email_domain_overrides:
     e = ("Config email_domain_overrides must be a list of pairs. Found {}."
       .format(pair))
     raise ValueError(e)
+
+# The string ti use when parsing data strings from LDAP
+LDAP_DATE_STRING = config.get("conf","ldap_date_string")
+
 
 # Create a Float API object
 float_api = FloatAPI(
@@ -186,7 +189,6 @@ valid_ldap_users = []
 # FIXME: Do I really need to loop here?
 for x in ldap_connection.entries:
   valid_ldap_users = x.memberUid.value
-
 
 
 # Search for people in LDAP
@@ -308,11 +310,12 @@ def ldap_date2string(ldap_date):
   try:
     date_string = datetime.strptime(
       ldap_date,
-      '%Y%m%d00Z'
+      LDAP_DATE_STRING,
       ).date().isoformat()
   except Exception as e:
     logging.debug("Could not create date from string: {}".format(e))
 
+    # Convert from date object, because convert from string failed
     try:
       date_string = ldap_date.date().isoformat()
     except Exception as e:
