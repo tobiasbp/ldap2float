@@ -3,6 +3,7 @@ import argparse
 import os
 from datetime import datetime, date , timedelta
 import logging
+import re
 
 import ldap3
 import configparser
@@ -10,7 +11,8 @@ import ssl
 
 from float_api import FloatAPI, UnexpectedStatusCode
 
-
+# The regex to use when checking validity of dates used in Float
+FLOAT_DATE_REGEX = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 
 parser = argparse.ArgumentParser(
   allow_abbrev=False,
@@ -316,15 +318,24 @@ def ldap_date2string(ldap_date):
   except Exception as e:
     logging.debug("Could not create date from string: {}".format(e))
 
-    # Convert from date object, because convert from string failed
-    try:
-      date_string = ldap_date.date().isoformat()
-    except Exception as e:
-      # No reason to go
-      m = "Could not convert date from LDAP: {}".format(e)
-      raise ValueError(m)
+  # Try to convert from date object
+  try:
+    date_string = ldap_date.date().isoformat()
+  except Exception as e:
+    logging.debug("Could not create date from date object: {}".format(e))
 
-  # FIXME: Throw error if string is not YYYY-MM-DD
+  # We could not parse the date
+  if not date_string:
+    m = "Could not convert date from LDAP: {}".format(ldap_date)
+    logging.error(m)
+    raise ValueError(m)
+
+  # Raise exception if converted date is not what we expect
+  if not re.match(FLOAT_DATE_REGEX, date_string):
+    m = ("Converted date from LDAP '{}' does not match YYYY-MM-DD"
+      .format(date_string))
+    logging.error(m)
+    raise ValueError(m)
 
   return date_string
 
