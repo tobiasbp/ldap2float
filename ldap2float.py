@@ -294,6 +294,7 @@ def float_user_needs_update(float_data, latest_data):
   for key, value in latest_data.items():
     # Look for mismatches
     if value != float_data[key]:
+      logging.info(f"Value LDAP:{value} != Float:{float_data[key]} for key {key}.")
       # Found a mismatch. Needs to update
       return True
 
